@@ -7,7 +7,7 @@ CREATE EXTENSION IF NOT EXISTS cube;
 
 -- Load AGE extension explicitly
 LOAD 'age';
-SET search_path = ag_catalog, public;
+SET search_path = ag_catalog, "$user", public;
 
 -- Create the graph
 SELECT create_graph('memory_graph');
@@ -193,23 +193,33 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
--- Function to create memory relationship in graph (same as yours)
+-- Function to create memory relationship in graph
 CREATE OR REPLACE FUNCTION create_memory_relationship(
     from_id UUID,
     to_id UUID,
     relationship_type TEXT,
     properties JSONB DEFAULT '{}'
-) RETURNS VOID AS $func$
+) RETURNS VOID AS $$
 BEGIN
-    PERFORM * FROM cypher('memory_graph', $cypher$
-        MATCH (a:MemoryNode {memory_id: $1}), (b:MemoryNode {memory_id: $2})
-        CREATE (a)-[r:$3]->(b)
-        SET r = $4
-    $cypher$, 
-        ARRAY[from_id::text, to_id::text, relationship_type, properties::text]
-    ) as (result agtype);
+    EXECUTE format(
+        'SELECT * FROM cypher(''memory_graph'', $q$
+            MATCH (a:MemoryNode), (b:MemoryNode)
+            WHERE a.memory_id = %L AND b.memory_id = %L
+            CREATE (a)-[r:%s %s]->(b)
+            RETURN r
+        $q$) as (result agtype)',
+        from_id,
+        to_id,
+        relationship_type,
+        case when properties = '{}'::jsonb 
+             then '' 
+             else format('{%s}', 
+                  (SELECT string_agg(format('%I: %s', key, value), ', ')
+                   FROM jsonb_each(properties)))
+        end
+    );
 END;
-$func$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
 
 -- Triggers (same as yours)
 CREATE TRIGGER update_memory_timestamp
